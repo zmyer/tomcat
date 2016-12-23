@@ -284,8 +284,8 @@ public abstract class WebappClassLoaderBase extends URLClassLoader
 
 
     /**
-     * A list of read File and Jndi Permission's required if this loader
-     * is for a web application context.
+     * A list of read File Permission's required if this loader is for a web
+     * application context.
      */
     protected final ArrayList<Permission> permissionList = new ArrayList<>();
 
@@ -1301,9 +1301,7 @@ public abstract class WebappClassLoaderBase extends URLClassLoader
     /**
      * Get the Permissions for a CodeSource.  If this instance
      * of WebappClassLoaderBase is for a web application context,
-     * add read FilePermission or JndiPermissions for the base
-     * directory (if unpacked),
-     * the context URL, and jar file resources.
+     * add read FilePermission for the appropriate resources.
      *
      * @param codeSource where the code was loaded from
      * @return PermissionCollection for CodeSource
@@ -1862,10 +1860,17 @@ public abstract class WebappClassLoaderBase extends URLClassLoader
                 }
             }
         } catch (Throwable t) {
-            ExceptionUtils.handleThrowable(t);
-            log.warn(sm.getString(
-                    "webappClassLoader.checkThreadLocalsForLeaksFail",
-                    getContextName()), t);
+            JreCompat jreCompat = JreCompat.getInstance();
+            if (jreCompat.isInstanceOfInaccessibleObjectException(t)) {
+                // Must be running on Java 9 without the necessary command line
+                // options.
+                log.warn(sm.getString("webappClassLoader.addExportsThreadLocal"));
+            } else {
+                ExceptionUtils.handleThrowable(t);
+                log.warn(sm.getString(
+                        "webappClassLoader.checkThreadLocalsForLeaksFail",
+                        getContextName()), t);
+            }
         }
     }
 
@@ -2118,7 +2123,7 @@ public abstract class WebappClassLoaderBase extends URLClassLoader
             if (jreCompat.isInstanceOfInaccessibleObjectException(e)) {
                 // Must be running on Java 9 without the necessary command line
                 // options.
-                log.warn(sm.getString("webappClassLoader.addExports"));
+                log.warn(sm.getString("webappClassLoader.addExportsRmi"));
             } else {
                 // Re-throw all other exceptions
                 throw e;

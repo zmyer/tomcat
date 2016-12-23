@@ -32,6 +32,7 @@ import org.apache.catalina.LifecycleState;
 import org.apache.catalina.Pipeline;
 import org.apache.catalina.Valve;
 import org.apache.catalina.util.LifecycleBase;
+import org.apache.catalina.util.ToStringUtil;
 import org.apache.juli.logging.Log;
 import org.apache.juli.logging.LogFactory;
 import org.apache.tomcat.util.ExceptionUtils;
@@ -50,8 +51,7 @@ import org.apache.tomcat.util.ExceptionUtils;
  * @author Craig R. McClanahan
  */
 
-public class StandardPipeline extends LifecycleBase
-        implements Pipeline, Contained {
+public class StandardPipeline extends LifecycleBase implements Pipeline {
 
     private static final Log log = LogFactory.getLog(StandardPipeline.class);
 
@@ -214,10 +214,7 @@ public class StandardPipeline extends LifecycleBase
      */
     @Override
     public String toString() {
-        StringBuilder sb = new StringBuilder("Pipeline[");
-        sb.append(container);
-        sb.append(']');
-        return sb.toString();
+        return ToStringUtil.toString(this);
     }
 
 

@@ -25,7 +25,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.servlet.WriteListener;
 
-import org.apache.tomcat.util.buf.ByteChunk;
 import org.apache.tomcat.util.buf.MessageBytes;
 import org.apache.tomcat.util.http.MimeHeaders;
 import org.apache.tomcat.util.http.parser.MediaType;
@@ -486,19 +485,6 @@ public final class Response {
 
     public long getContentLengthLong() {
         return contentLength;
-    }
-
-
-    /**
-     * Write a chunk of bytes.
-     *
-     * @param chunk The bytes to write
-     *
-     * @throws IOException If an I/O error occurs during the write
-     */
-    public void doWrite(ByteChunk chunk) throws IOException {
-        outputBuffer.doWrite(chunk);
-        contentWritten+=chunk.getLength();
     }
 
 

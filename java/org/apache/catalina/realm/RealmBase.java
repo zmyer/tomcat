@@ -49,6 +49,7 @@ import org.apache.catalina.connector.Request;
 import org.apache.catalina.connector.Response;
 import org.apache.catalina.util.LifecycleMBeanBase;
 import org.apache.catalina.util.SessionConfig;
+import org.apache.catalina.util.ToStringUtil;
 import org.apache.juli.logging.Log;
 import org.apache.juli.logging.LogFactory;
 import org.apache.tomcat.util.IntrospectionUtils;
@@ -475,7 +476,7 @@ public abstract class RealmBase extends LifecycleMBeanBase implements Realm {
      * {@inheritDoc}
      */
     @Override
-    public Principal authenticate(GSSContext gssContext, boolean storeCred) {
+    public Principal authenticate(GSSContext gssContext, boolean storeCreds) {
         if (gssContext.isEstablished()) {
             GSSName gssName = null;
             try {
@@ -495,7 +496,7 @@ public abstract class RealmBase extends LifecycleMBeanBase implements Realm {
                     }
                 }
                 GSSCredential gssCredential = null;
-                if (storeCred && gssContext.getCredDelegState()) {
+                if (storeCreds && gssContext.getCredDelegState()) {
                     try {
                         gssCredential = gssContext.getDelegCred();
                     } catch (GSSException e) {
@@ -508,6 +509,8 @@ public abstract class RealmBase extends LifecycleMBeanBase implements Realm {
                 }
                 return getPrincipal(name, gssCredential);
             }
+        } else {
+            log.error(sm.getString("realmBase.gssContextNotEstablished"));
         }
 
         // Fail in all other cases
@@ -1101,10 +1104,7 @@ public abstract class RealmBase extends LifecycleMBeanBase implements Realm {
      */
     @Override
     public String toString() {
-        StringBuilder sb = new StringBuilder("Realm[");
-        sb.append(getName());
-        sb.append(']');
-        return sb.toString();
+        return ToStringUtil.toString(this);
     }
 
 
@@ -1163,13 +1163,6 @@ public abstract class RealmBase extends LifecycleMBeanBase implements Realm {
             return B2CConverter.getCharset(charset);
         }
     }
-
-
-    /**
-     * @return a short name for this Realm implementation, for use in
-     * log messages.
-     */
-    protected abstract String getName();
 
 
     /**

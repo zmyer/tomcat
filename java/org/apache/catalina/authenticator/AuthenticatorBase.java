@@ -48,6 +48,7 @@ import org.apache.catalina.LifecycleException;
 import org.apache.catalina.Manager;
 import org.apache.catalina.Realm;
 import org.apache.catalina.Session;
+import org.apache.catalina.TomcatPrincipal;
 import org.apache.catalina.Valve;
 import org.apache.catalina.Wrapper;
 import org.apache.catalina.authenticator.jaspic.CallbackHandlerImpl;
@@ -61,6 +62,7 @@ import org.apache.catalina.valves.ValveBase;
 import org.apache.coyote.ActionCode;
 import org.apache.juli.logging.Log;
 import org.apache.juli.logging.LogFactory;
+import org.apache.tomcat.util.ExceptionUtils;
 import org.apache.tomcat.util.descriptor.web.LoginConfig;
 import org.apache.tomcat.util.descriptor.web.SecurityConstraint;
 import org.apache.tomcat.util.http.FastHttpDateFormat;
@@ -451,7 +453,7 @@ public abstract class AuthenticatorBase extends ValveBase
 
         // The Servlet may specify security constraints through annotations.
         // Ensure that they have been processed before constraints are checked
-        Wrapper wrapper = request.getMappingData().wrapper;
+        Wrapper wrapper = request.getWrapper();
         if (wrapper != null) {
             wrapper.servletSecurityAnnotationScan();
         }
@@ -506,21 +508,24 @@ public abstract class AuthenticatorBase extends ValveBase
 
         // Since authenticate modifies the response on failure,
         // we have to check for allow-from-all first.
-        if (!authRequired && constraints != null) {
-            authRequired = true;
-            for (int i = 0; i < constraints.length && authRequired; i++) {
+        boolean hasAuthConstraint = false;
+        if (constraints != null) {
+            hasAuthConstraint = true;
+            for (int i = 0; i < constraints.length && hasAuthConstraint; i++) {
                 if (!constraints[i].getAuthConstraint()) {
-                    authRequired = false;
-                    break;
+                    hasAuthConstraint = false;
                 } else if (!constraints[i].getAllRoles() &&
                         !constraints[i].getAuthenticatedUsers()) {
                     String[] roles = constraints[i].findAuthRoles();
                     if (roles == null || roles.length == 0) {
-                        authRequired = false;
-                        break;
+                        hasAuthConstraint = false;
                     }
                 }
             }
+        }
+
+        if (!authRequired && hasAuthConstraint) {
+            authRequired = true;
         }
 
         if (!authRequired && context.getPreemptiveAuthentication()) {
@@ -542,7 +547,7 @@ public abstract class AuthenticatorBase extends ValveBase
             }
 
             if (jaspicProvider != null) {
-                jaspicState = getJaspicState(jaspicProvider, request, response);
+                jaspicState = getJaspicState(jaspicProvider, request, response, hasAuthConstraint);
                 if (jaspicState == null) {
                     return;
                 }
@@ -601,7 +606,7 @@ public abstract class AuthenticatorBase extends ValveBase
             return doAuthenticate(request, httpResponse);
         } else {
             Response response = request.getResponse();
-            JaspicState jaspicState = getJaspicState(jaspicProvider, request, response);
+            JaspicState jaspicState = getJaspicState(jaspicProvider, request, response, true);
             if (jaspicState == null) {
                 return false;
             }
@@ -627,11 +632,11 @@ public abstract class AuthenticatorBase extends ValveBase
 
 
     private JaspicState getJaspicState(AuthConfigProvider jaspicProvider, Request request,
-            Response response) throws IOException {
+            Response response, boolean authMandatory) throws IOException {
         JaspicState jaspicState = new JaspicState();
 
         jaspicState.messageInfo =
-                new MessageInfoImpl(request.getRequest(), response.getResponse(), true);
+                new MessageInfoImpl(request.getRequest(), response.getResponse(), authMandatory);
 
         try {
             ServerAuthConfig serverAuthConfig = jaspicProvider.getServerAuthConfig(
@@ -1101,6 +1106,16 @@ public abstract class AuthenticatorBase extends ValveBase
                 serverAuthContext.cleanSubject(messageInfo, client);
             } catch (AuthException e) {
                 log.debug(sm.getString("authenticator.jaspicCleanSubjectFail"), e);
+            }
+        }
+
+        Principal p = request.getPrincipal();
+        if (p instanceof TomcatPrincipal) {
+            try {
+                ((TomcatPrincipal) p).logout();
+            } catch (Throwable t) {
+                ExceptionUtils.handleThrowable(t);
+                log.debug(sm.getString("authenticator.tomcatPrincipalLogoutFail"), t);
             }
         }
 

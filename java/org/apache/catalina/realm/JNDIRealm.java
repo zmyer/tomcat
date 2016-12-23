@@ -235,12 +235,6 @@ public class JNDIRealm extends RealmBase {
 
 
     /**
-     * Descriptive information about this Realm implementation.
-     */
-    protected static final String name = "JNDIRealm";
-
-
-    /**
      * The protocol that will be used in the communication with the
      * directory server.
      */
@@ -2168,17 +2162,6 @@ public class JNDIRealm extends RealmBase {
 
 
     /**
-     * @return a short name for this Realm implementation.
-     */
-    @Override
-    protected String getName() {
-
-        return name;
-
-    }
-
-
-    /**
      * Get the password for the specified user.
      * @param username The user name
      * @return the password associated with the given principal's user name.
@@ -2377,6 +2360,12 @@ public class JNDIRealm extends RealmBase {
 
         return context;
 
+    }
+
+    @Override
+    public boolean isAvailable() {
+        // Simple best effort check
+        return (context != null);
     }
 
     private DirContext createDirContext(Hashtable<String, String> env) throws NamingException {

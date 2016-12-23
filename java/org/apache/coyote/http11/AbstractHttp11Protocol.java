@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.StringTokenizer;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 
 import javax.servlet.http.HttpUpgradeHandler;
 
@@ -47,9 +48,9 @@ public abstract class AbstractHttp11Protocol<S> extends AbstractProtocol<S> {
             StringManager.getManager(AbstractHttp11Protocol.class);
 
 
-    public AbstractHttp11Protocol(AbstractEndpoint<S> endpoint) {
+    public AbstractHttp11Protocol(AbstractEndpoint<S,?> endpoint) {
         super(endpoint);
-        setSoTimeout(Constants.DEFAULT_CONNECTION_TIMEOUT);
+        setConnectionTimeout(Constants.DEFAULT_CONNECTION_TIMEOUT);
         ConnectionHandler<S> cHandler = new ConnectionHandler<>(this);
         setHandler(cHandler);
         getEndpoint().setHandler(cHandler);
@@ -58,6 +59,9 @@ public abstract class AbstractHttp11Protocol<S> extends AbstractProtocol<S> {
 
     @Override
     public void init() throws Exception {
+        // Upgrade protocols have to be configured first since the endpoint
+        // init (triggered via super.init() below) uses this list to configure
+        // the list of ALPN protocols to advertise
         for (UpgradeProtocol upgradeProtocol : upgradeProtocols) {
             configureUpgradeProtocol(upgradeProtocol);
         }
@@ -78,7 +82,7 @@ public abstract class AbstractHttp11Protocol<S> extends AbstractProtocol<S> {
      * Over-ridden here to make the method visible to nested classes.
      */
     @Override
-    protected AbstractEndpoint<S> getEndpoint() {
+    protected AbstractEndpoint<S,?> getEndpoint() {
         return super.getEndpoint();
     }
 
@@ -86,13 +90,26 @@ public abstract class AbstractHttp11Protocol<S> extends AbstractProtocol<S> {
     // ------------------------------------------------ HTTP specific properties
     // ------------------------------------------ managed in the ProtocolHandler
 
-    /**
-     * Maximum size of the post which will be saved when processing certain
-     * requests, such as a POST.
-     */
     private int maxSavePostSize = 4 * 1024;
+    /**
+     * Return the maximum size of the post which will be saved during FORM or
+     * CLIENT-CERT authentication.
+     *
+     * @return The size in bytes
+     */
     public int getMaxSavePostSize() { return maxSavePostSize; }
-    public void setMaxSavePostSize(int valueI) { maxSavePostSize = valueI; }
+    /**
+     * Set the maximum size of a POST which will be buffered during FORM or
+     * CLIENT-CERT authentication. When a POST is received where the security
+     * constraints require a client certificate, the POST body needs to be
+     * buffered while an SSL handshake takes place to obtain the certificate. A
+     * similar buffering is required during FDORM auth.
+     *
+     * @param maxSavePostSize The maximum size POST body to buffer in bytes
+     */
+    public void setMaxSavePostSize(int maxSavePostSize) {
+        this.maxSavePostSize = maxSavePostSize;
+    }
 
 
     /**
@@ -103,42 +120,126 @@ public abstract class AbstractHttp11Protocol<S> extends AbstractProtocol<S> {
     public void setMaxHttpHeaderSize(int valueI) { maxHttpHeaderSize = valueI; }
 
 
-    /**
-     * Specifies a different (usually  longer) connection timeout during data
-     * upload.
-     */
     private int connectionUploadTimeout = 300000;
+    /**
+     * Specifies a different (usually longer) connection timeout during data
+     * upload. Default is 5 minutes as in Apache HTTPD server.
+     *
+     * @return The timeout in milliseconds
+     */
     public int getConnectionUploadTimeout() { return connectionUploadTimeout; }
-    public void setConnectionUploadTimeout(int i) {
-        connectionUploadTimeout = i;
+    /**
+     * Set the upload timeout.
+     *
+     * @param timeout Upload timeout in milliseconds
+     */
+    public void setConnectionUploadTimeout(int timeout) {
+        connectionUploadTimeout = timeout;
     }
 
 
-    /**
-     * If true, the connectionUploadTimeout will be ignored and the regular
-     * socket timeout will be used for the full duration of the connection.
-     */
     private boolean disableUploadTimeout = true;
+    /**
+     * Get the flag that controls upload time-outs. If true, the
+     * connectionUploadTimeout will be ignored and the regular socket timeout
+     * will be used for the full duration of the connection.
+     *
+     * @return {@code true} if the separate upload timeout is disabled
+     */
     public boolean getDisableUploadTimeout() { return disableUploadTimeout; }
+    /**
+     * Set the flag to control whether a separate connection timeout is used
+     * during upload of a request body.
+     *
+     * @param isDisabled {@code true} if the separate upload timeout should be
+     *                   disabled
+     */
     public void setDisableUploadTimeout(boolean isDisabled) {
         disableUploadTimeout = isDisabled;
     }
 
 
+    private int compressionLevel = 0;
     /**
-     * Integrated compression support.
+     * Set compression level.
+     *
+     * @param compression One of <code>on</code>, <code>force</code>,
+     *                    <code>off</code> or the minimum compression size in
+     *                    bytes which implies <code>on</code>
      */
-    private String compression = "off";
-    public String getCompression() { return compression; }
-    public void setCompression(String valueS) { compression = valueS; }
+    public void setCompression(String compression) {
+        if (compression.equals("on")) {
+            this.compressionLevel = 1;
+        } else if (compression.equals("force")) {
+            this.compressionLevel = 2;
+        } else if (compression.equals("off")) {
+            this.compressionLevel = 0;
+        } else {
+            try {
+                // Try to parse compression as an int, which would give the
+                // minimum compression size
+                setCompressionMinSize(Integer.parseInt(compression));
+                this.compressionLevel = 1;
+            } catch (Exception e) {
+                this.compressionLevel = 0;
+            }
+        }
+    }
 
 
-    private String noCompressionUserAgents = null;
+    /**
+     * Return compression level.
+     *
+     * @return The current compression level in string form (off/on/force)
+     */
+    public String getCompression() {
+        switch (compressionLevel) {
+        case 0:
+            return "off";
+        case 1:
+            return "on";
+        case 2:
+            return "force";
+        }
+        return "off";
+    }
+    protected int getCompressionLevel() {
+        return compressionLevel;
+    }
+
+
+    private Pattern noCompressionUserAgents = null;
+    /**
+     * Obtain the String form of the regular expression that defines the user
+     * agents to not use gzip with.
+     *
+     * @return The regular expression as a String
+     */
     public String getNoCompressionUserAgents() {
+        if (noCompressionUserAgents == null) {
+            return null;
+        } else {
+            return noCompressionUserAgents.toString();
+        }
+    }
+    protected Pattern getNoCompressionUserAgentsPattern() {
         return noCompressionUserAgents;
     }
-    public void setNoCompressionUserAgents(String valueS) {
-        noCompressionUserAgents = valueS;
+    /**
+     * Set no compression user agent pattern. Regular expression as supported
+     * by {@link Pattern}. e.g.: <code>gorilla|desesplorer|tigrus</code>.
+     *
+     * @param noCompressionUserAgents The regular expression for user agent
+     *                                strings for which compression should not
+     *                                be applied
+     */
+    public void setNoCompressionUserAgents(String noCompressionUserAgents) {
+        if (noCompressionUserAgents == null || noCompressionUserAgents.length() == 0) {
+            this.noCompressionUserAgents = null;
+        } else {
+            this.noCompressionUserAgents =
+                Pattern.compile(noCompressionUserAgents);
+        }
     }
 
 
@@ -170,33 +271,72 @@ public abstract class AbstractHttp11Protocol<S> extends AbstractProtocol<S> {
 
     private int compressionMinSize = 2048;
     public int getCompressionMinSize() { return compressionMinSize; }
-    public void setCompressionMinSize(int valueI) {
-        compressionMinSize = valueI;
+    /**
+     * Set Minimum size to trigger compression.
+     *
+     * @param compressionMinSize The minimum content length required for
+     *                           compression in bytes
+     */
+    public void setCompressionMinSize(int compressionMinSize) {
+        this.compressionMinSize = compressionMinSize;
     }
 
 
+    private Pattern restrictedUserAgents = null;
     /**
-     * Regular expression that defines the User agents which should be
-     * restricted to HTTP/1.0 support.
+     * Get the string form of the regular expression that defines the User
+     * agents which should be restricted to HTTP/1.0 support.
+     *
+     * @return The regular expression as a String
      */
-    private String restrictedUserAgents = null;
-    public String getRestrictedUserAgents() { return restrictedUserAgents; }
-    public void setRestrictedUserAgents(String valueS) {
-        restrictedUserAgents = valueS;
+    public String getRestrictedUserAgents() {
+        if (restrictedUserAgents == null) {
+            return null;
+        } else {
+            return restrictedUserAgents.toString();
+        }
+    }
+    protected Pattern getRestrictedUserAgentsPattern() {
+        return restrictedUserAgents;
+    }
+    /**
+     * Set restricted user agent list (which will downgrade the connector
+     * to HTTP/1.0 mode). Regular expression as supported by {@link Pattern}.
+     *
+     * @param restrictedUserAgents The regular expression as supported by
+     *                             {@link Pattern} for the user agents e.g.
+     *                             "gorilla|desesplorer|tigrus"
+     */
+    public void setRestrictedUserAgents(String restrictedUserAgents) {
+        if (restrictedUserAgents == null || restrictedUserAgents.length() == 0) {
+            this.restrictedUserAgents = null;
+        } else {
+            this.restrictedUserAgents = Pattern.compile(restrictedUserAgents);
+        }
     }
 
 
-    /**
-     * Server header.
-     */
     private String server;
     public String getServer() { return server; }
-    public void setServer( String server ) {
+    /**
+     * Set the server header name.
+     *
+     * @param server The new value to use for the server header
+     */
+    public void setServer(String server) {
         this.server = server;
     }
 
 
     private boolean serverRemoveAppProvidedValues = false;
+    /**
+     * Should application provider values for the HTTP Server header be removed.
+     * Note that if {@link #server} is set, any application provided value will
+     * be over-ridden.
+     *
+     * @return {@code true} if application provided values should be removed,
+     *         otherwise {@code false}
+     */
     public boolean getServerRemoveAppProvidedValues() { return serverRemoveAppProvidedValues; }
     public void setServerRemoveAppProvidedValues(boolean serverRemoveAppProvidedValues) {
         this.serverRemoveAppProvidedValues = serverRemoveAppProvidedValues;
@@ -269,6 +409,9 @@ public abstract class AbstractHttp11Protocol<S> extends AbstractProtocol<S> {
             allowedTrailerHeaders.removeAll(toRemove);
         }
     }
+    protected Set<String> getAllowedTrailerHeadersInternal() {
+        return allowedTrailerHeaders;
+    }
     public String getAllowedTrailerHeaders() {
         // Chances of a size change between these lines are small enough that a
         // sync is unnecessary.
@@ -311,6 +454,7 @@ public abstract class AbstractHttp11Protocol<S> extends AbstractProtocol<S> {
         return upgradeProtocols.toArray(new UpgradeProtocol[0]);
     }
 
+
     /**
      * The protocols that are available via internal Tomcat support for access
      * via HTTP upgrade.
@@ -322,9 +466,8 @@ public abstract class AbstractHttp11Protocol<S> extends AbstractProtocol<S> {
      */
     private final Map<String,UpgradeProtocol> negotiatedProtocols = new HashMap<>();
     private void configureUpgradeProtocol(UpgradeProtocol upgradeProtocol) {
-        boolean isSSLEnabled = getEndpoint().isSSLEnabled();
         // HTTP Upgrade
-        String httpUpgradeName = upgradeProtocol.getHttpUpgradeName(isSSLEnabled);
+        String httpUpgradeName = upgradeProtocol.getHttpUpgradeName(getEndpoint().isSSLEnabled());
         boolean httpUpgradeConfigured = false;
         if (httpUpgradeName != null && httpUpgradeName.length() > 0) {
             httpUpgradeProtocols.put(httpUpgradeName, upgradeProtocol);
@@ -333,21 +476,22 @@ public abstract class AbstractHttp11Protocol<S> extends AbstractProtocol<S> {
                     getName(), httpUpgradeName));
         }
 
+
         // ALPN
         String alpnName = upgradeProtocol.getAlpnName();
         if (alpnName != null && alpnName.length() > 0) {
-            // ALPN requires SSL
-            if (isSSLEnabled) {
+            if (getEndpoint().isAlpnSupported()) {
                 negotiatedProtocols.put(alpnName, upgradeProtocol);
                 getEndpoint().addNegotiatedProtocol(alpnName);
                 getLog().info(sm.getString("abstractHttp11Protocol.alpnConfigured",
                         getName(), alpnName));
             } else {
                 if (!httpUpgradeConfigured) {
-                    // HTTP Upgrade is not available for this protocol so it
-                    // requires ALPN. It has been configured on a non-secure
-                    // connector where ALPN is not available.
-                    getLog().error(sm.getString("abstractHttp11Protocol.alpnWithNoTls",
+                    // ALPN is not supported by this connector and the upgrade
+                    // protocol implementation does not support standard HTTP
+                    // upgrade so there is no way available to enable support
+                    // for this protocol.
+                    getLog().error(sm.getString("abstractHttp11Protocol.alpnWithNoAlpn",
                             upgradeProtocol.getClass().getName(), alpnName, getName()));
                 }
             }
@@ -384,6 +528,13 @@ public abstract class AbstractHttp11Protocol<S> extends AbstractProtocol<S> {
     public int getMaxKeepAliveRequests() {
         return getEndpoint().getMaxKeepAliveRequests();
     }
+    /**
+     * Set the maximum number of Keep-Alive requests to allow.
+     * This is to safeguard from DoS attacks. Setting to a negative
+     * value disables the limit.
+     *
+     * @param mkar The new maximum number of Keep-Alive requests allowed
+     */
     public void setMaxKeepAliveRequests(int mkar) {
         getEndpoint().setMaxKeepAliveRequests(mkar);
     }
@@ -633,22 +784,8 @@ public abstract class AbstractHttp11Protocol<S> extends AbstractProtocol<S> {
 
     @Override
     protected Processor createProcessor() {
-        Http11Processor processor = new Http11Processor(getMaxHttpHeaderSize(), getEndpoint(),
-                getMaxTrailerSize(), allowedTrailerHeaders, getMaxExtensionSize(),
-                getMaxSwallowSize(), httpUpgradeProtocols);
+        Http11Processor processor = new Http11Processor(this);
         processor.setAdapter(getAdapter());
-        processor.setMaxKeepAliveRequests(getMaxKeepAliveRequests());
-        processor.setConnectionUploadTimeout(getConnectionUploadTimeout());
-        processor.setDisableUploadTimeout(getDisableUploadTimeout());
-        processor.setCompressionMinSize(getCompressionMinSize());
-        processor.setCompression(getCompression());
-        processor.setNoCompressionUserAgents(getNoCompressionUserAgents());
-        processor.setCompressableMimeTypes(getCompressableMimeTypes());
-        processor.setRestrictedUserAgents(getRestrictedUserAgents());
-        processor.setMaxSavePostSize(getMaxSavePostSize());
-        processor.setServer(getServer());
-        processor.setServerRemoveAppProvidedValues(getServerRemoveAppProvidedValues());
-        processor.setMaxCookieCount(getMaxCookieCount());
         return processor;
     }
 

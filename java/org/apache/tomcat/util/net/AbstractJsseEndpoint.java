@@ -16,6 +16,10 @@
  */
 package org.apache.tomcat.util.net;
 
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
+import java.nio.channels.NetworkChannel;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
@@ -30,7 +34,7 @@ import org.apache.tomcat.util.net.SSLHostConfig.Type;
 import org.apache.tomcat.util.net.openssl.OpenSSLImplementation;
 import org.apache.tomcat.util.net.openssl.ciphers.Cipher;
 
-public abstract class AbstractJsseEndpoint<S> extends AbstractEndpoint<S> {
+public abstract class AbstractJsseEndpoint<S,U> extends AbstractEndpoint<S,U> {
 
     private String sslImplementationName = null;
     private int sniParseLimit = 64 * 1024;
@@ -206,6 +210,27 @@ public abstract class AbstractJsseEndpoint<S> extends AbstractEndpoint<S> {
     }
 
 
+
+    @Override
+    public boolean isAlpnSupported() {
+        // ALPN requires TLS so if TLS is not enabled, ALPN cannot be supported
+        if (!isSSLEnabled()) {
+            return false;
+        }
+
+        // Depends on the SSLImplementation.
+        SSLImplementation sslImplementation;
+        try {
+            sslImplementation = SSLImplementation.getInstance(getSslImplementationName());
+        } catch (ClassNotFoundException e) {
+            // Ignore the exception. It will be logged when trying to start the
+            // end point.
+            return false;
+        }
+        return sslImplementation.isAlpnSupported();
+    }
+
+
     @Override
     public void unbind() throws Exception {
         for (SSLHostConfig sslHostConfig : sslHostConfigs.values()) {
@@ -213,5 +238,22 @@ public abstract class AbstractJsseEndpoint<S> extends AbstractEndpoint<S> {
                 certificate.setSslContext(null);
             }
         }
+    }
+
+
+    protected abstract NetworkChannel getServerSocket();
+
+
+    @Override
+    protected final InetSocketAddress getLocalAddress() throws IOException {
+        NetworkChannel serverSock = getServerSocket();
+        if (serverSock == null) {
+            return null;
+        }
+        SocketAddress sa = serverSock.getLocalAddress();
+        if (sa instanceof InetSocketAddress) {
+            return (InetSocketAddress) sa;
+        }
+        return null;
     }
 }

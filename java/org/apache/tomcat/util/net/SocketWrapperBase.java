@@ -20,7 +20,9 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.CompletionHandler;
 import java.util.Iterator;
+import java.util.concurrent.Executor;
 import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -38,7 +40,7 @@ public abstract class SocketWrapperBase<E> {
     protected static final StringManager sm = StringManager.getManager(SocketWrapperBase.class);
 
     private final E socket;
-    private final AbstractEndpoint<E> endpoint;
+    private final AbstractEndpoint<E,?> endpoint;
 
     // Volatile because I/O and setting the timeout values occurs on a different
     // thread to the thread checking the timeout.
@@ -90,7 +92,7 @@ public abstract class SocketWrapperBase<E> {
      */
     protected int bufferedWriteSize = 64 * 1024; // 64k default write buffer
 
-    public SocketWrapperBase(E socket, AbstractEndpoint<E> endpoint) {
+    public SocketWrapperBase(E socket, AbstractEndpoint<E,?> endpoint) {
         this.socket = socket;
         this.endpoint = endpoint;
         ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
@@ -102,8 +104,23 @@ public abstract class SocketWrapperBase<E> {
         return socket;
     }
 
-    public AbstractEndpoint<E> getEndpoint() {
+    protected AbstractEndpoint<E,?> getEndpoint() {
         return endpoint;
+    }
+
+    /**
+     * Transfers processing to a container thread.
+     *
+     * @param runnable The actions to process on a container thread
+     *
+     * @throws RejectedExecutionException If the runnable cannot be executed
+     */
+    public void execute(Runnable runnable) {
+        Executor executor = endpoint.getExecutor();
+        if (!endpoint.isRunning() || executor == null) {
+            throw new RejectedExecutionException();
+        }
+        executor.execute(runnable);
     }
 
     public IOException getError() { return error; }
@@ -710,32 +727,6 @@ public abstract class SocketWrapperBase<E> {
 
     public void processSocket(SocketEvent socketStatus, boolean dispatch) {
         endpoint.processSocket(this, socketStatus, dispatch);
-    }
-
-
-    public synchronized void executeNonBlockingDispatches(Iterator<DispatchType> dispatches) {
-        /*
-         * This method is called when non-blocking IO is initiated by defining
-         * a read and/or write listener in a non-container thread. It is called
-         * once the non-container thread completes so that the first calls to
-         * onWritePossible() and/or onDataAvailable() as appropriate are made by
-         * the container.
-         *
-         * Processing the dispatches requires (for APR/native at least)
-         * that the socket has been added to the waitingRequests queue. This may
-         * not have occurred by the time that the non-container thread completes
-         * triggering the call to this method. Therefore, the coded syncs on the
-         * SocketWrapper as the container thread that initiated this
-         * non-container thread holds a lock on the SocketWrapper. The container
-         * thread will add the socket to the waitingRequests queue before
-         * releasing the lock on the socketWrapper. Therefore, by obtaining the
-         * lock on socketWrapper before processing the dispatches, we can be
-         * sure that the socket has been added to the waitingRequests queue.
-         */
-        while (dispatches != null && dispatches.hasNext()) {
-            DispatchType dispatchType = dispatches.next();
-            processSocket(dispatchType.getSocketStatus(), false);
-        }
     }
 
 

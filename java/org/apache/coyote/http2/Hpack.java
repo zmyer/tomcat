@@ -22,7 +22,7 @@ import org.apache.tomcat.util.res.StringManager;
 
 final class Hpack {
 
-    static final StringManager sm = StringManager.getManager(Hpack.class);
+    private static final StringManager sm = StringManager.getManager(Hpack.class);
 
     private static final byte LOWER_DIFF = 'a' - 'A';
     static final int DEFAULT_TABLE_SIZE = 4096;
@@ -204,11 +204,11 @@ final class Hpack {
     }
 
 
-    static byte toLower(byte b) {
-        if (b >= 'A' && b <= 'Z') {
-            return (byte) (b + LOWER_DIFF);
+    static char toLower(char c) {
+        if (c >= 'A' && c <= 'Z') {
+            return (char) (c + LOWER_DIFF);
         }
-        return b;
+        return c;
     }
 
     private Hpack() {}

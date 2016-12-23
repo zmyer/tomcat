@@ -19,14 +19,14 @@ package org.apache.coyote;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.nio.ByteBuffer;
-import java.util.concurrent.Executor;
+import java.util.Iterator;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.servlet.RequestDispatcher;
 
 import org.apache.tomcat.util.ExceptionUtils;
 import org.apache.tomcat.util.buf.ByteChunk;
-import org.apache.tomcat.util.net.AbstractEndpoint;
 import org.apache.tomcat.util.net.AbstractEndpoint.Handler.SocketState;
 import org.apache.tomcat.util.net.DispatchType;
 import org.apache.tomcat.util.net.SSLSupport;
@@ -45,12 +45,10 @@ public abstract class AbstractProcessor extends AbstractProcessorLight implement
     protected Adapter adapter;
     protected final AsyncStateMachine asyncStateMachine;
     private volatile long asyncTimeout = -1;
-    protected final AbstractEndpoint<?> endpoint;
     protected final Request request;
     protected final Response response;
     protected volatile SocketWrapperBase<?> socketWrapper = null;
     protected volatile SSLSupport sslSupport;
-    private int maxCookieCount = 200;
 
 
     /**
@@ -59,24 +57,12 @@ public abstract class AbstractProcessor extends AbstractProcessorLight implement
     private ErrorState errorState = ErrorState.NONE;
 
 
-    /**
-     * Used by HTTP/2.
-     * @param coyoteRequest The request
-     * @param coyoteResponse The response
-     */
+    public AbstractProcessor() {
+        this(new Request(), new Response());
+    }
+
+
     protected AbstractProcessor(Request coyoteRequest, Response coyoteResponse) {
-        this(null, coyoteRequest, coyoteResponse);
-    }
-
-
-    public AbstractProcessor(AbstractEndpoint<?> endpoint) {
-        this(endpoint, new Request(), new Response());
-    }
-
-
-    private AbstractProcessor(AbstractEndpoint<?> endpoint, Request coyoteRequest,
-            Response coyoteResponse) {
-        this.endpoint = endpoint;
         asyncStateMachine = new AsyncStateMachine(this);
         request = coyoteRequest;
         response = coyoteResponse;
@@ -104,7 +90,10 @@ public abstract class AbstractProcessor extends AbstractProcessorLight implement
                 response.setStatus(500);
             }
             getLog().info(sm.getString("abstractProcessor.nonContainerThreadError"), t);
-            socketWrapper.processSocket(SocketEvent.ERROR, true);
+            // Set the request attribute so that the async onError() event is
+            // fired when the error event is processed
+            request.setAttribute(RequestDispatcher.ERROR_EXCEPTION, t);
+            processSocketEvent(SocketEvent.ERROR, true);
         }
     }
 
@@ -164,10 +153,18 @@ public abstract class AbstractProcessor extends AbstractProcessorLight implement
 
 
     /**
-     * @return the Executor used by the underlying endpoint.
+     * Provides a mechanism to trigger processing on a container thread.
+     *
+     * @param runnable  The task representing the processing that needs to take
+     *                  place on a container thread
      */
-    protected Executor getExecutor() {
-        return endpoint.getExecutor();
+    protected void execute(Runnable runnable) {
+        SocketWrapperBase<?> socketWrapper = this.socketWrapper;
+        if (socketWrapper == null) {
+            throw new RejectedExecutionException(sm.getString("abstractProcessor.noExecute"));
+        } else {
+            socketWrapper.execute(runnable);
+        }
     }
 
 
@@ -269,6 +266,8 @@ public abstract class AbstractProcessor extends AbstractProcessorLight implement
             action(ActionCode.COMMIT, null);
             try {
                 finishResponse();
+            } catch (CloseNowException cne) {
+                setErrorState(ErrorState.CLOSE_NOW, cne);
             } catch (IOException e) {
                 setErrorState(ErrorState.CLOSE_CONNECTION_NOW, e);
             }
@@ -306,7 +305,11 @@ public abstract class AbstractProcessor extends AbstractProcessorLight implement
         case CLOSE_NOW: {
             // Prevent further writes to the response
             setSwallowResponse();
-            setErrorState(ErrorState.CLOSE_NOW, null);
+            if (param instanceof Throwable) {
+                setErrorState(ErrorState.CLOSE_NOW, (Throwable) param);
+            } else {
+                setErrorState(ErrorState.CLOSE_NOW, null);
+            }
             break;
         }
         case DISABLE_SWALLOW_INPUT: {
@@ -372,13 +375,13 @@ public abstract class AbstractProcessor extends AbstractProcessorLight implement
         case ASYNC_COMPLETE: {
             clearDispatches();
             if (asyncStateMachine.asyncComplete()) {
-                socketWrapper.processSocket(SocketEvent.OPEN_READ, true);
+                processSocketEvent(SocketEvent.OPEN_READ, true);
             }
             break;
         }
         case ASYNC_DISPATCH: {
             if (asyncStateMachine.asyncDispatch()) {
-                socketWrapper.processSocket(SocketEvent.OPEN_READ, true);
+                processSocketEvent(SocketEvent.OPEN_READ, true);
             }
             break;
         }
@@ -462,10 +465,7 @@ public abstract class AbstractProcessor extends AbstractProcessorLight implement
             break;
         }
         case DISPATCH_EXECUTE: {
-            SocketWrapperBase<?> wrapper = socketWrapper;
-            if (wrapper != null) {
-                executeDispatches(wrapper);
-            }
+            executeDispatches();
             break;
         }
 
@@ -517,7 +517,7 @@ public abstract class AbstractProcessor extends AbstractProcessorLight implement
     private void doTimeoutAsync() {
         // Avoid multiple timeouts
         setAsyncTimeout(-1);
-        socketWrapper.processSocket(SocketEvent.TIMEOUT, true);
+        processSocketEvent(SocketEvent.TIMEOUT, true);
     }
 
 
@@ -528,16 +528,6 @@ public abstract class AbstractProcessor extends AbstractProcessorLight implement
 
     public long getAsyncTimeout() {
         return asyncTimeout;
-    }
-
-
-    public int getMaxCookieCount() {
-        return maxCookieCount;
-    }
-
-
-    public void setMaxCookieCount(int maxCookieCount) {
-        this.maxCookieCount = maxCookieCount;
     }
 
 
@@ -641,6 +631,14 @@ public abstract class AbstractProcessor extends AbstractProcessorLight implement
     }
 
 
+    protected void processSocketEvent(SocketEvent event, boolean dispatch) {
+        SocketWrapperBase<?> socketWrapper = getSocketWrapper();
+        if (socketWrapper != null) {
+            socketWrapper.processSocket(event, dispatch);
+        }
+    }
+
+
     protected abstract boolean isRequestBodyFullyRead();
 
 
@@ -650,7 +648,36 @@ public abstract class AbstractProcessor extends AbstractProcessorLight implement
     protected abstract boolean isReady();
 
 
-    protected abstract void executeDispatches(SocketWrapperBase<?> wrapper);
+    protected void executeDispatches() {
+        SocketWrapperBase<?> socketWrapper = getSocketWrapper();
+        Iterator<DispatchType> dispatches = getIteratorAndClearDispatches();
+        if (socketWrapper != null) {
+            synchronized (socketWrapper) {
+                /*
+                 * This method is called when non-blocking IO is initiated by defining
+                 * a read and/or write listener in a non-container thread. It is called
+                 * once the non-container thread completes so that the first calls to
+                 * onWritePossible() and/or onDataAvailable() as appropriate are made by
+                 * the container.
+                 *
+                 * Processing the dispatches requires (for APR/native at least)
+                 * that the socket has been added to the waitingRequests queue. This may
+                 * not have occurred by the time that the non-container thread completes
+                 * triggering the call to this method. Therefore, the coded syncs on the
+                 * SocketWrapper as the container thread that initiated this
+                 * non-container thread holds a lock on the SocketWrapper. The container
+                 * thread will add the socket to the waitingRequests queue before
+                 * releasing the lock on the socketWrapper. Therefore, by obtaining the
+                 * lock on socketWrapper before processing the dispatches, we can be
+                 * sure that the socket has been added to the waitingRequests queue.
+                 */
+                while (dispatches != null && dispatches.hasNext()) {
+                    DispatchType dispatchType = dispatches.next();
+                    socketWrapper.processSocket(dispatchType.getSocketStatus(), false);
+                }
+            }
+        }
+    }
 
 
     /**

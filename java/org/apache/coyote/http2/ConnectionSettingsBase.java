@@ -23,7 +23,7 @@ import org.apache.juli.logging.Log;
 import org.apache.juli.logging.LogFactory;
 import org.apache.tomcat.util.res.StringManager;
 
-public abstract class ConnectionSettingsBase<T extends Throwable> {
+abstract class ConnectionSettingsBase<T extends Throwable> {
 
     private final Log log = LogFactory.getLog(ConnectionSettingsBase.class);
     private final StringManager sm = StringManager.getManager(ConnectionSettingsBase.class);
@@ -31,24 +31,25 @@ public abstract class ConnectionSettingsBase<T extends Throwable> {
     private final String connectionId;
 
     // Limits
-    protected static final int MAX_WINDOW_SIZE = (1 << 31) - 1;
-    protected static final int MIN_MAX_FRAME_SIZE = 1 << 14;
-    protected static final int MAX_MAX_FRAME_SIZE = (1 << 24) - 1;
-    protected static final long UNLIMITED = ((long)1 << 32); // Use the maximum possible
+    static final int MAX_WINDOW_SIZE = (1 << 31) - 1;
+    static final int MIN_MAX_FRAME_SIZE = 1 << 14;
+    static final int MAX_MAX_FRAME_SIZE = (1 << 24) - 1;
+    static final long UNLIMITED = ((long)1 << 32); // Use the maximum possible
+    static final int MAX_HEADER_TABLE_SIZE = 1 << 16;
 
     // Defaults
-    protected static final int DEFAULT_HEADER_TABLE_SIZE = 4096;
-    protected static final boolean DEFAULT_ENABLE_PUSH = true;
-    protected static final long DEFAULT_MAX_CONCURRENT_STREAMS = UNLIMITED;
-    protected static final int DEFAULT_INITIAL_WINDOW_SIZE = (1 << 16) - 1;
-    protected static final int DEFAULT_MAX_FRAME_SIZE = MIN_MAX_FRAME_SIZE;
-    protected static final long DEFAULT_MAX_HEADER_LIST_SIZE = UNLIMITED;
+    static final int DEFAULT_HEADER_TABLE_SIZE = 4096;
+    static final boolean DEFAULT_ENABLE_PUSH = true;
+    static final long DEFAULT_MAX_CONCURRENT_STREAMS = UNLIMITED;
+    static final int DEFAULT_INITIAL_WINDOW_SIZE = (1 << 16) - 1;
+    static final int DEFAULT_MAX_FRAME_SIZE = MIN_MAX_FRAME_SIZE;
+    static final long DEFAULT_MAX_HEADER_LIST_SIZE = UNLIMITED;
 
-    protected Map<Setting,Long> current = new HashMap<>();
-    protected Map<Setting,Long> pending = new HashMap<>();
+    Map<Setting,Long> current = new HashMap<>();
+    Map<Setting,Long> pending = new HashMap<>();
 
 
-    public ConnectionSettingsBase(String connectionId) {
+    ConnectionSettingsBase(String connectionId) {
         this.connectionId = connectionId;
         // Set up the defaults
         current.put(Setting.HEADER_TABLE_SIZE,      Long.valueOf(DEFAULT_HEADER_TABLE_SIZE));
@@ -60,7 +61,7 @@ public abstract class ConnectionSettingsBase<T extends Throwable> {
     }
 
 
-    public void set(Setting setting, long value) throws T {
+    final void set(Setting setting, long value) throws T {
         if (log.isDebugEnabled()) {
             log.debug(sm.getString("connectionSettings.debug",
                     connectionId, setting, Long.toString(value)));
@@ -101,33 +102,33 @@ public abstract class ConnectionSettingsBase<T extends Throwable> {
     }
 
 
-    public int getHeaderTableSize() {
+    final int getHeaderTableSize() {
         return getMinInt(Setting.HEADER_TABLE_SIZE);
     }
 
 
-    public boolean getEnablePush() {
+    final boolean getEnablePush() {
         long result = getMin(Setting.ENABLE_PUSH);
         return result != 0;
     }
 
 
-    public long getMaxConcurrentStreams() {
+    final long getMaxConcurrentStreams() {
         return getMax(Setting.MAX_CONCURRENT_STREAMS);
     }
 
 
-    public int getInitialWindowSize() {
+    final int getInitialWindowSize() {
         return getMaxInt(Setting.INITIAL_WINDOW_SIZE);
     }
 
 
-    public int getMaxFrameSize() {
+    final int getMaxFrameSize() {
         return getMaxInt(Setting.MAX_FRAME_SIZE);
     }
 
 
-    public long getMaxHeaderListSize() {
+    final long getMaxHeaderListSize() {
         return getMax(Setting.MAX_HEADER_LIST_SIZE);
     }
 
@@ -175,8 +176,7 @@ public abstract class ConnectionSettingsBase<T extends Throwable> {
 
 
     private void validateHeaderTableSize(long headerTableSize) throws T {
-        // Need to put a sensible limit on this. Start with 16k (default is 4k)
-        if (headerTableSize > (16 * 1024)) {
+        if (headerTableSize > MAX_HEADER_TABLE_SIZE) {
             String msg = sm.getString("connectionSettings.headerTableSizeLimit",
                     connectionId, Long.toString(headerTableSize));
             throwException(msg, Http2Error.PROTOCOL_ERROR);

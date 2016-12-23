@@ -61,14 +61,21 @@ public class HpackDecoder {
      */
     private int maxMemorySize;
 
+    private int maxHeaderCount = Constants.DEFAULT_MAX_HEADER_COUNT;
+    private int maxHeaderSize = Constants.DEFAULT_MAX_HEADER_SIZE;
+
+    private volatile int headerCount = 0;
+    private volatile boolean countedCookie;
+    private volatile int headerSize = 0;
+
     private final StringBuilder stringBuilder = new StringBuilder();
 
-    public HpackDecoder(int maxMemorySize) {
+    HpackDecoder(int maxMemorySize) {
         this.maxMemorySize = maxMemorySize;
         headerTable = new Hpack.HeaderField[DEFAULT_RING_BUFFER_SIZE];
     }
 
-    public HpackDecoder() {
+    HpackDecoder() {
         this(Hpack.DEFAULT_TABLE_SIZE);
     }
 
@@ -81,7 +88,7 @@ public class HpackDecoder {
      *
      * @throws HpackException If the packed data is not valid
      */
-    public void decode(ByteBuffer buffer) throws HpackException {
+    void decode(ByteBuffer buffer) throws HpackException {
         while (buffer.hasRemaining()) {
             int originalPos = buffer.position();
             byte b = buffer.get();
@@ -109,7 +116,7 @@ public class HpackDecoder {
                     buffer.position(originalPos);
                     return;
                 }
-                headerEmitter.emitHeader(headerName, headerValue, false);
+                emitHeader(headerName, headerValue);
                 addEntryToHeaderTable(new Hpack.HeaderField(headerName, headerValue));
             } else if ((b & 0b11110000) == 0) {
                 //Literal Header Field without Indexing
@@ -123,7 +130,7 @@ public class HpackDecoder {
                     buffer.position(originalPos);
                     return;
                 }
-                headerEmitter.emitHeader(headerName, headerValue, false);
+                emitHeader(headerName, headerValue);
             } else if ((b & 0b11110000) == 0b00010000) {
                 //Literal Header Field never indexed
                 String headerName = readHeaderName(buffer, 4);
@@ -136,7 +143,7 @@ public class HpackDecoder {
                     buffer.position(originalPos);
                     return;
                 }
-                headerEmitter.emitHeader(headerName, headerValue, true);
+                emitHeader(headerName, headerValue);
             } else if ((b & 0b11100000) == 0b00100000) {
                 //context update max table size change
                 if (!handleMaxMemorySizeChange(buffer, originalPos)) {
@@ -246,7 +253,7 @@ public class HpackDecoder {
         } else {
             int adjustedIndex = getRealIndex(index - Hpack.STATIC_TABLE_LENGTH);
             Hpack.HeaderField headerField = headerTable[adjustedIndex];
-            headerEmitter.emitHeader(headerField.name, headerField.value, false);
+            emitHeader(headerField.name, headerField.value);
         }
     }
 
@@ -273,7 +280,7 @@ public class HpackDecoder {
         if (entry.value == null) {
             throw new HpackException();
         }
-        headerEmitter.emitHeader(entry.name, entry.value, false);
+        emitHeader(entry.name, entry.value);
     }
 
     private void addEntryToHeaderTable(Hpack.HeaderField entry) {
@@ -324,20 +331,103 @@ public class HpackDecoder {
 
 
     /**
-     * Interface that can be used to immediately validate headers (ex: uppercase detection).
+     * Interface implemented by the intended recipient of the headers.
      */
-    public interface HeaderEmitter {
-        void emitHeader(String name, String value, boolean neverIndex);
+    interface HeaderEmitter {
+        /**
+         * Pass a single header to the recipient.
+         *
+         * @param name  Header name
+         * @param value Header value
+         */
+        void emitHeader(String name, String value);
+
+        /**
+         * Are the headers pass to the recipient so far valid? The decoder needs
+         * to process all the headers to maintain state even if there is a
+         * problem. In addition, it is easy for the the intended recipient to
+         * track if the complete set of headers is valid since to do that state
+         * needs to be maintained between the parsing of the initial headers and
+         * the parsing of any trailer headers. The recipient is the best place
+         * to maintain that state.
+         *
+         * @throws StreamException If the headers received to date are not valid
+         */
+        void validateHeaders() throws StreamException;
     }
 
 
-    public HeaderEmitter getHeaderEmitter() {
+    HeaderEmitter getHeaderEmitter() {
         return headerEmitter;
     }
 
-    public void setHeaderEmitter(HeaderEmitter headerEmitter) {
+
+    void setHeaderEmitter(HeaderEmitter headerEmitter) {
         this.headerEmitter = headerEmitter;
+        // Reset limit tracking
+        headerCount = 0;
+        countedCookie = false;
+        headerSize = 0;
     }
+
+
+    void setMaxHeaderCount(int maxHeaderCount) {
+        this.maxHeaderCount = maxHeaderCount;
+    }
+
+
+    void setMaxHeaderSize(int maxHeaderSize) {
+        this.maxHeaderSize = maxHeaderSize;
+    }
+
+
+    private void emitHeader(String name, String value) {
+        // Header names are forced to lower case
+        if ("cookie".equals(name)) {
+            // Only count the cookie header once since HTTP/2 splits it into
+            // multiple headers to aid compression
+            if (!countedCookie) {
+                headerCount ++;
+                countedCookie = true;
+            }
+        } else {
+            headerCount ++;
+        }
+        // Overhead will vary. The main concern is that lots of small headers
+        // trigger the limiting mechanism correctly. Therefore, use an overhead
+        // estimate of 3 which is the worst case for small headers.
+        int inc = 3 + name.length() + value.length();
+        headerSize += inc;
+        if (!isHeaderCountExceeded() && !isHeaderSizeExceeded(0)) {
+            headerEmitter.emitHeader(name, value);
+        }
+    }
+
+
+    boolean isHeaderCountExceeded() {
+        if (maxHeaderCount < 0) {
+            return false;
+        }
+        return headerCount > maxHeaderCount;
+    }
+
+
+    boolean isHeaderSizeExceeded(int unreadSize) {
+        if (maxHeaderSize < 0) {
+            return false;
+        }
+        return (headerSize + unreadSize) > maxHeaderSize;
+    }
+
+
+    boolean isHeaderSwallowSizeExceeded(int unreadSize) {
+        if (maxHeaderSize < 0) {
+            return false;
+        }
+        // Swallow the same again before closing the connection.
+        return (headerSize + unreadSize) > (2 * maxHeaderSize);
+    }
+
 
     //package private fields for unit tests
 

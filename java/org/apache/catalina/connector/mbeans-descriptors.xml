@@ -117,11 +117,11 @@
 
     <!-- Common -->
     <attribute   name="maxThreads"
-          description="The maximum number of request processing threads to be created"
+          description="The maximum number of request processing threads to be created for the internal Executor. -1 indicates an external Executor is being used."
                  type="int"/>
 
     <attribute   name="minSpareThreads"
-          description="The number of request processing threads that will be created"
+          description="The number of request processing threads that will be created for the internal Executor. -1 indicates an external Executor is being used."
                  type="int"/>
 
     <!-- Common -->
@@ -140,7 +140,8 @@
 
     <attribute   name="protocol"
           description="Coyote protocol handler in use"
-                 type="java.lang.String"/>
+                 type="java.lang.String"
+            writeable="false"/>
 
     <attribute   name="protocolHandlerClassName"
           description="Coyote Protocol handler class name"
@@ -188,7 +189,7 @@
 
     <!-- Common -->
     <attribute    name="threadPriority"
-           description="The thread priority for processors"
+           description="The thread priority for processors using the internal Executor. -1 indicates an external Executor is being used."
                   type="int"/>
 
     <attribute   name="URIEncoding"

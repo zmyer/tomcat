@@ -56,12 +56,6 @@ public class MemoryRealm  extends RealmBase {
 
 
     /**
-     * Descriptive information about this Realm implementation.
-     */
-    protected static final String name = "MemoryRealm";
-
-
-    /**
      * The pathname (absolute or relative to Catalina's current working
      * directory) of the XML file containing our database information.
      */
@@ -202,17 +196,6 @@ public class MemoryRealm  extends RealmBase {
             digester.addRuleSet(new MemoryRuleSet());
         }
         return (digester);
-
-    }
-
-
-    /**
-     * @return a short name for this Realm implementation.
-     */
-    @Override
-    protected String getName() {
-
-        return (name);
 
     }
 

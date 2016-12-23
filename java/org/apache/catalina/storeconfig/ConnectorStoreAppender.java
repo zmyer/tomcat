@@ -25,8 +25,10 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 
 import org.apache.catalina.connector.Connector;
 import org.apache.coyote.ProtocolHandler;
@@ -43,19 +45,20 @@ import org.apache.tomcat.util.net.SocketProperties;
 public class ConnectorStoreAppender extends StoreAppender {
 
     protected static final HashMap<String, String> replacements = new HashMap<>();
+    protected static final Set<String> internalExecutorAttributes = new HashSet<>();
     static {
-        replacements.put("backlog", "acceptCount");
-        replacements.put("soLinger", "connectionLinger");
-        replacements.put("soTimeout", "connectionTimeout");
         replacements.put("timeout", "connectionUploadTimeout");
         replacements.put("clientauth", "clientAuth");
         replacements.put("keystore", "keystoreFile");
         replacements.put("randomfile", "randomFile");
-        replacements.put("rootfile", "rootFile");
         replacements.put("keypass", "keystorePass");
         replacements.put("keytype", "keystoreType");
         replacements.put("protocol", "sslProtocol");
         replacements.put("protocols", "sslProtocols");
+
+        internalExecutorAttributes.add("maxThreads");
+        internalExecutorAttributes.add("minSpareThreads");
+        internalExecutorAttributes.add("threadPriority");
     }
 
     @Override
@@ -97,8 +100,13 @@ public class ConnectorStoreAppender extends StoreAppender {
                 printValue(writer, indent, key, value);
             }
         }
-        if (protocol != null && !"HTTP/1.1".equals(protocol))
+        if (protocol != null && !"HTTP/1.1".equals(protocol)) {
             super.printValue(writer, indent, "protocol", protocol);
+        }
+        String executorName = connector.getExecutorName();
+        if (!Connector.INTERNAL_EXECUTOR_NAME.equals(executorName)) {
+            super.printValue(writer, indent, "executor", executorName);
+        }
 
     }
 
@@ -107,7 +115,7 @@ public class ConnectorStoreAppender extends StoreAppender {
      *
      * @param bean The connector
      * @return List of Connector property names
-     * @throws IntrospectionException Error intropecting connector
+     * @throws IntrospectionException Error introspecting connector
      */
     protected List<String> getPropertyKeys(Connector bean)
             throws IntrospectionException {
@@ -151,6 +159,10 @@ public class ConnectorStoreAppender extends StoreAppender {
                 continue; // Must be a read-write primitive or String
             }
             String key = descriptor.getName();
+            if (!Connector.INTERNAL_EXECUTOR_NAME.equals(bean.getExecutorName()) &&
+                    internalExecutorAttributes.contains(key)) {
+                continue;
+            }
             if (replacements.get(key) != null) {
                 key = replacements.get(key);
             }

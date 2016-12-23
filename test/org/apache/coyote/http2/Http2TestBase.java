@@ -24,6 +24,8 @@ import java.io.OutputStream;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 
 import javax.net.SocketFactory;
@@ -66,6 +68,9 @@ public abstract class Http2TestBase extends TomcatBaseTest {
         byte[] empty = new byte[0];
         EMPTY_HTTP2_SETTINGS_HEADER = "HTTP2-Settings: " + Base64.encodeBase64String(empty) + "\r\n";
     }
+
+    protected static final String TRAILER_HEADER_NAME = "X-TrailerTest";
+    protected static final String TRAILER_HEADER_VALUE = "test";
 
     private Socket s;
     protected HpackEncoder hpackEncoder;
@@ -170,14 +175,25 @@ public abstract class Http2TestBase extends TomcatBaseTest {
 
     protected void buildGetRequest(byte[] frameHeader, ByteBuffer headersPayload, byte[] padding,
             int streamId, String url) {
+        List<Header> headers = new ArrayList<>(3);
+        headers.add(new Header(":method", "GET"));
+        headers.add(new Header(":path", url));
+        headers.add(new Header(":authority", "localhost:" + getPort()));
+
+        buildGetRequest(frameHeader, headersPayload, padding, headers, streamId);
+    }
+
+
+    protected void buildGetRequest(byte[] frameHeader, ByteBuffer headersPayload, byte[] padding,
+            List<Header> headers, int streamId) {
         if (padding != null) {
             headersPayload.put((byte) (0xFF & padding.length));
         }
-        MimeHeaders headers = new MimeHeaders();
-        headers.addValue(":method").setString("GET");
-        headers.addValue(":path").setString(url);
-        headers.addValue(":authority").setString("localhost:" + getPort());
-        hpackEncoder.encode(headers, headersPayload);
+        MimeHeaders mimeHeaders = new MimeHeaders();
+        for (Header header : headers) {
+            mimeHeaders.addValue(header.getName()).setString(header.getValue());
+        }
+        hpackEncoder.encode(mimeHeaders, headersPayload);
         if (padding != null) {
             headersPayload.put(padding);
         }
@@ -197,10 +213,21 @@ public abstract class Http2TestBase extends TomcatBaseTest {
 
     protected void buildSimpleGetRequestPart1(byte[] frameHeader, ByteBuffer headersPayload,
             int streamId) {
-        MimeHeaders headers = new MimeHeaders();
-        headers.addValue(":method").setString("GET");
-        headers.addValue(":path").setString("/simple");
-        hpackEncoder.encode(headers, headersPayload);
+        List<Header> headers = new ArrayList<>(3);
+        headers.add(new Header(":method", "GET"));
+        headers.add(new Header(":path", "/simple"));
+
+        buildSimpleGetRequestPart1(frameHeader, headersPayload, headers, streamId);
+    }
+
+
+    protected void buildSimpleGetRequestPart1(byte[] frameHeader, ByteBuffer headersPayload,
+            List<Header> headers, int streamId) {
+        MimeHeaders mimeHeaders = new MimeHeaders();
+        for (Header header : headers) {
+            mimeHeaders.addValue(header.getName()).setString(header.getValue());
+        }
+        hpackEncoder.encode(mimeHeaders, headersPayload);
 
         headersPayload.flip();
 
@@ -215,9 +242,20 @@ public abstract class Http2TestBase extends TomcatBaseTest {
 
     protected void buildSimpleGetRequestPart2(byte[] frameHeader, ByteBuffer headersPayload,
             int streamId) {
-        MimeHeaders headers = new MimeHeaders();
-        headers.addValue(":authority").setString("localhost:" + getPort());
-        hpackEncoder.encode(headers, headersPayload);
+        List<Header> headers = new ArrayList<>(3);
+        headers.add(new Header(":authority", "localhost:" + getPort()));
+
+        buildSimpleGetRequestPart2(frameHeader, headersPayload, headers, streamId);
+    }
+
+
+    protected void buildSimpleGetRequestPart2(byte[] frameHeader, ByteBuffer headersPayload,
+            List<Header> headers, int streamId) {
+        MimeHeaders mimeHeaders = new MimeHeaders();
+        for (Header header : headers) {
+            mimeHeaders.addValue(header.getName()).setString(header.getValue());
+        }
+        hpackEncoder.encode(mimeHeaders, headersPayload);
 
         headersPayload.flip();
 
@@ -259,6 +297,13 @@ public abstract class Http2TestBase extends TomcatBaseTest {
     protected void buildPostRequest(byte[] headersFrameHeader, ByteBuffer headersPayload,
             boolean useExpectation, byte[] dataFrameHeader, ByteBuffer dataPayload, byte[] padding,
             int streamId) {
+        buildPostRequest(headersFrameHeader, headersPayload, useExpectation, dataFrameHeader,
+                dataPayload, padding, null, null, streamId);
+    }
+
+    protected void buildPostRequest(byte[] headersFrameHeader, ByteBuffer headersPayload,
+            boolean useExpectation, byte[] dataFrameHeader, ByteBuffer dataPayload, byte[] padding,
+            byte[] trailersFrameHeader, ByteBuffer trailersPayload, int streamId) {
         MimeHeaders headers = new MimeHeaders();
         headers.addValue(":method").setString("POST");
         headers.addValue(":path").setString("/simple");
@@ -297,19 +342,58 @@ public abstract class Http2TestBase extends TomcatBaseTest {
         ByteUtil.setThreeBytes(dataFrameHeader, 0, dataPayload.limit());
         // Data is type 0
         // Flags: End of stream 1, Padding 8
-        if (padding == null) {
+        if (trailersPayload == null) {
             dataFrameHeader[4] = 0x01;
         } else {
-            dataFrameHeader[4] = 0x09;
+            dataFrameHeader[4] = 0x00;
+        }
+        if (padding != null) {
+            dataFrameHeader[4] += 0x08;
         }
         ByteUtil.set31Bits(dataFrameHeader, 5, streamId);
+
+        // Trailers
+        if (trailersPayload != null) {
+            MimeHeaders trailerHeaders = new MimeHeaders();
+            trailerHeaders.addValue(TRAILER_HEADER_NAME).setString(TRAILER_HEADER_VALUE);
+            hpackEncoder.encode(trailerHeaders, trailersPayload);
+
+            trailersPayload.flip();
+
+            ByteUtil.setThreeBytes(trailersFrameHeader, 0, trailersPayload.limit());
+            trailersFrameHeader[3] = FrameType.HEADERS.getIdByte();
+            // Flags. end of headers (0x04) and end of stream (0x01)
+            trailersFrameHeader[4] = 0x05;
+            // Stream id
+            ByteUtil.set31Bits(trailersFrameHeader, 5, streamId);
+        }
     }
+
 
     protected void writeFrame(byte[] header, ByteBuffer payload)
             throws IOException {
+        writeFrame(header, payload, 0, payload.limit());
+    }
+
+
+    protected void writeFrame(byte[] header, ByteBuffer payload, int offset, int len)
+            throws IOException {
+        writeFrame(header, payload, offset, len, 0);
+    }
+
+
+    protected void writeFrame(byte[] header, ByteBuffer payload, int offset, int len, int delayms)
+            throws IOException {
         os.write(header);
-        os.write(payload.array(), payload.arrayOffset(), payload.limit());
+        os.write(payload.array(), payload.arrayOffset() + offset, len);
         os.flush();
+        if (delayms > 0) {
+            try {
+                Thread.sleep(delayms);
+            } catch (InterruptedException e) {
+                // Ignore
+            }
+        }
     }
 
 
@@ -339,23 +423,35 @@ public abstract class Http2TestBase extends TomcatBaseTest {
 
 
     protected String getEmptyResponseTrace(int streamId) {
-        return getSingleResponseBodyFrameTrace(streamId, 0);
+        return getResponseBodyFrameTrace(streamId, "0");
     }
 
 
     protected String getSimpleResponseTrace(int streamId) {
-        return getSingleResponseBodyFrameTrace(streamId, 8192);
+        return getResponseBodyFrameTrace(streamId, "8192");
     }
 
 
-    private String getSingleResponseBodyFrameTrace(int streamId, int bodySize) {
+    protected String getCookieResponseTrace(int streamId, int cookieCount) {
+        return getResponseBodyFrameTrace(streamId, "text/plain;charset=UTF-8",
+                "Cookie count: " + cookieCount);
+    }
+
+
+    private String getResponseBodyFrameTrace(int streamId, String body) {
+        return getResponseBodyFrameTrace(streamId, "application/octet-stream", body);
+    }
+
+    private String getResponseBodyFrameTrace(int streamId, String contentType, String body) {
         StringBuilder result = new StringBuilder();
         result.append(streamId);
         result.append("-HeadersStart\n");
         result.append(streamId);
         result.append("-Header-[:status]-[200]\n");
         result.append(streamId);
-        result.append("-Header-[content-type]-[application/octet-stream]\n");
+        result.append("-Header-[content-type]-[");
+        result.append(contentType);
+        result.append("]\n");
         result.append(streamId);
         result.append("-Header-[date]-[");
         result.append(DEFAULT_DATE);
@@ -364,7 +460,7 @@ public abstract class Http2TestBase extends TomcatBaseTest {
         result.append("-HeadersEnd\n");
         result.append(streamId);
         result.append("-Body-");
-        result.append(bodySize);
+        result.append(body);
         result.append("\n");
         result.append(streamId);
         result.append("-EndOfStream\n");
@@ -399,6 +495,8 @@ public abstract class Http2TestBase extends TomcatBaseTest {
         ctxt.addServletMappingDecoded("/simple", "simple");
         Tomcat.addServlet(ctxt, "large", new LargeServlet());
         ctxt.addServletMappingDecoded("/large", "large");
+        Tomcat.addServlet(ctxt, "cookie", new CookieServlet());
+        ctxt.addServletMappingDecoded("/cookie", "cookie");
 
         tomcat.start();
     }
@@ -582,7 +680,7 @@ public abstract class Http2TestBase extends TomcatBaseTest {
         pingHeader[3] = FrameType.PING.getIdByte();
         // Flags
         if (ack) {
-            ByteUtil.setOneBytes(pingHeader, 4, 0x01);
+            setOneBytes(pingHeader, 4, 0x01);
         }
         // Stream
         ByteUtil.set31Bits(pingHeader, 5, streamId);
@@ -659,7 +757,7 @@ public abstract class Http2TestBase extends TomcatBaseTest {
 
         // Payload
         ByteUtil.set31Bits(priorityFrame, 9, streamDependencyId);
-        ByteUtil.setOneBytes(priorityFrame, 13, weight);
+        setOneBytes(priorityFrame, 13, weight);
 
         os.write(priorityFrame);
         os.flush();
@@ -698,6 +796,11 @@ public abstract class Http2TestBase extends TomcatBaseTest {
 
         os.write(settingFrame);
         os.flush();
+    }
+
+
+    static void setOneBytes(byte[] output, int firstByte, int value) {
+        output[firstByte] = (byte) (value & 0xFF);
     }
 
 
@@ -741,6 +844,12 @@ public abstract class Http2TestBase extends TomcatBaseTest {
         private StringBuffer trace = new StringBuffer();
         private String lastStreamId = "0";
         private ConnectionSettingsRemote remoteSettings = new ConnectionSettingsRemote("-1");
+        private boolean traceBody = false;
+        private ByteBuffer bodyBuffer = null;
+
+        public void setTraceBody(boolean traceBody) {
+            this.traceBody = traceBody;
+        }
 
 
         @Override
@@ -752,26 +861,41 @@ public abstract class Http2TestBase extends TomcatBaseTest {
         @Override
         public ByteBuffer startRequestBodyFrame(int streamId, int payloadSize) {
             lastStreamId = Integer.toString(streamId);
-            trace.append(lastStreamId + "-Body-" + payloadSize + "\n");
-            return null;
+            if (traceBody) {
+                bodyBuffer = ByteBuffer.allocate(payloadSize);
+                return bodyBuffer;
+            } else {
+                trace.append(lastStreamId + "-Body-" + payloadSize + "\n");
+                return null;
+            }
         }
 
 
         @Override
         public void endRequestBodyFrame(int streamId) throws Http2Exception {
-            // NO-OP
+            if (bodyBuffer != null) {
+                if (bodyBuffer.limit() > 0) {
+                    trace.append(lastStreamId + "-Body-");
+                    bodyBuffer.flip();
+                    while (bodyBuffer.hasRemaining()) {
+                        trace.append((char) bodyBuffer.get());
+                    }
+                    trace.append("\n");
+                    bodyBuffer = null;
+                }
+            }
         }
 
 
         @Override
-        public void receiveEndOfStream(int streamId) {
+        public void receivedEndOfStream(int streamId) {
             lastStreamId = Integer.toString(streamId);
             trace.append(lastStreamId + "-EndOfStream\n");
         }
 
 
         @Override
-        public HeaderEmitter headersStart(int streamId) {
+        public HeaderEmitter headersStart(int streamId, boolean headersEndStream) {
             lastStreamId = Integer.toString(streamId);
             trace.append(lastStreamId + "-HeadersStart\n");
             return this;
@@ -786,12 +910,18 @@ public abstract class Http2TestBase extends TomcatBaseTest {
 
 
         @Override
-        public void emitHeader(String name, String value, boolean neverIndex) {
+        public void emitHeader(String name, String value) {
             // Date headers will always change so use a hard-coded default
             if ("date".equals(name)) {
                 value = DEFAULT_DATE;
             }
             trace.append(lastStreamId + "-Header-[" + name + "]-[" + value + "]\n");
+        }
+
+
+        @Override
+        public void validateHeaders() {
+            // NO-OP: Accept anything the server sends for the unit tests
         }
 
 
@@ -889,6 +1019,11 @@ public abstract class Http2TestBase extends TomcatBaseTest {
         public String getTrace() {
             return trace.toString();
         }
+
+
+        public int getMaxFrameSize() {
+            return remoteSettings.getMaxFrameSize();
+        }
     }
 
 
@@ -907,7 +1042,7 @@ public abstract class Http2TestBase extends TomcatBaseTest {
     }
 
 
-    private static class SimpleServlet extends HttpServlet {
+    protected static class SimpleServlet extends HttpServlet {
 
         private static final long serialVersionUID = 1L;
 
@@ -943,6 +1078,12 @@ public abstract class Http2TestBase extends TomcatBaseTest {
 
             ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
             IOTools.flow(bais, resp.getOutputStream());
+
+            // Check for trailer headers
+            String trailerValue = req.getHeader(TRAILER_HEADER_NAME);
+            if (trailerValue != null) {
+                resp.getOutputStream().write(trailerValue.getBytes(StandardCharsets.UTF_8));
+            }
         }
     }
 
@@ -973,6 +1114,21 @@ public abstract class Http2TestBase extends TomcatBaseTest {
     }
 
 
+    private static class CookieServlet extends HttpServlet {
+
+        private static final long serialVersionUID = 1L;
+
+        @Override
+        protected void doGet(HttpServletRequest req, HttpServletResponse resp)
+                throws ServletException, IOException {
+            resp.setContentType("text/plain");
+            resp.setCharacterEncoding("UTF-8");
+            resp.getWriter().print("Cookie count: " + req.getCookies().length);
+            resp.flushBuffer();
+        }
+    }
+
+
     static class SettingValue {
         private final int setting;
         private final long value;
@@ -987,6 +1143,25 @@ public abstract class Http2TestBase extends TomcatBaseTest {
         }
 
         public long getValue() {
+            return value;
+        }
+    }
+
+
+    static class Header {
+        private final String name;
+        private final String value;
+
+        public Header(String name, String value) {
+            this.name = name;
+            this.value = value;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public String getValue() {
             return value;
         }
     }

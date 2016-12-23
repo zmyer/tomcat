@@ -92,12 +92,6 @@ public class JDBCRealm
 
 
     /**
-     * Descriptive information about this Realm implementation.
-     */
-    protected static final String name = "JDBCRealm";
-
-
-    /**
      * The PreparedStatement to use for authenticating users.
      */
     protected PreparedStatement preparedCredentials = null;
@@ -414,6 +408,12 @@ public class JDBCRealm
     }
 
 
+    @Override
+    public boolean isAvailable() {
+        return (dbConnection != null);
+    }
+
+
     /**
      * Close the specified database connection.
      *
@@ -491,17 +491,6 @@ public class JDBCRealm
         }
 
         return (preparedCredentials);
-    }
-
-
-    /**
-     * @return a short name for this Realm implementation.
-     */
-    @Override
-    protected String getName() {
-
-        return (name);
-
     }
 
 

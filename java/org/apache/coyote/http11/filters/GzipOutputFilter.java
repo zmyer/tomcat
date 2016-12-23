@@ -27,7 +27,6 @@ import org.apache.coyote.Response;
 import org.apache.coyote.http11.OutputFilter;
 import org.apache.juli.logging.Log;
 import org.apache.juli.logging.LogFactory;
-import org.apache.tomcat.util.buf.ByteChunk;
 
 /**
  * Gzip output filter.
@@ -62,17 +61,6 @@ public class GzipOutputFilter implements OutputFilter {
 
 
     // --------------------------------------------------- OutputBuffer Methods
-
-    @Override
-    public int doWrite(ByteChunk chunk) throws IOException {
-        if (compressionStream == null) {
-            compressionStream = new GZIPOutputStream(fakeOutputStream, true);
-        }
-        compressionStream.write(chunk.getBytes(), chunk.getStart(),
-                                chunk.getLength());
-        return chunk.getLength();
-    }
-
 
     @Override
     public int doWrite(ByteBuffer chunk) throws IOException {
@@ -168,22 +156,19 @@ public class GzipOutputFilter implements OutputFilter {
 
     protected class FakeOutputStream
         extends OutputStream {
-        protected final ByteChunk outputChunk = new ByteChunk();
-        protected final byte[] singleByteBuffer = new byte[1];
+        protected final ByteBuffer outputChunk = ByteBuffer.allocate(1);
         @Override
         public void write(int b)
             throws IOException {
             // Shouldn't get used for good performance, but is needed for
             // compatibility with Sun JDK 1.4.0
-            singleByteBuffer[0] = (byte) (b & 0xff);
-            outputChunk.setBytes(singleByteBuffer, 0, 1);
+            outputChunk.put(0, (byte) (b & 0xff));
             buffer.doWrite(outputChunk);
         }
         @Override
         public void write(byte[] b, int off, int len)
             throws IOException {
-            outputChunk.setBytes(b, off, len);
-            buffer.doWrite(outputChunk);
+            buffer.doWrite(ByteBuffer.wrap(b, off, len));
         }
         @Override
         public void flush() throws IOException {/*NOOP*/}

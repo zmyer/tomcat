@@ -23,12 +23,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.servlet.ReadListener;
 
-import org.apache.tomcat.util.buf.ByteChunk;
 import org.apache.tomcat.util.buf.MessageBytes;
 import org.apache.tomcat.util.buf.UDecoder;
 import org.apache.tomcat.util.http.MimeHeaders;
 import org.apache.tomcat.util.http.Parameters;
 import org.apache.tomcat.util.http.ServerCookies;
+import org.apache.tomcat.util.net.ApplicationBufferHandler;
 import org.apache.tomcat.util.res.StringManager;
 
 /**
@@ -492,7 +492,7 @@ public final class Request {
 
 
     /**
-     * Read data from the input buffer and put it into a byte chunk.
+     * Read data from the input buffer and put it into ApplicationBufferHandler.
      *
      * The buffer is owned by the protocol implementation - it will be reused on
      * the next read. The Adapter must either process the data in place or copy
@@ -501,14 +501,14 @@ public final class Request {
      * InputStream, this interface allows the app to process data in place,
      * without copy.
      *
-     * @param chunk The destination to which to copy the data
+     * @param handler The destination to which to copy the data
      *
      * @return The number of bytes copied
      *
      * @throws IOException If an I/O error occurs during the copy
      */
-    public int doRead(ByteChunk chunk) throws IOException {
-        int n = inputBuffer.doRead(chunk);
+    public int doRead(ApplicationBufferHandler handler) throws IOException {
+        int n = inputBuffer.doRead(handler);
         if (n > 0) {
             bytesRead+=n;
         }

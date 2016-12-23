@@ -357,8 +357,36 @@ public abstract class ContainerBase extends LifecycleMBeanBase
 
         if (logger != null)
             return (logger);
-        logger = LogFactory.getLog(logName());
+        logger = LogFactory.getLog(getLogName());
         return (logger);
+
+    }
+
+
+    /**
+     * @return the abbreviated name of this container for logging messages
+     */
+    @Override
+    public String getLogName() {
+
+        if (logName != null) {
+            return logName;
+        }
+        String loggerName = null;
+        Container current = this;
+        while (current != null) {
+            String name = current.getName();
+            if ((name == null) || (name.equals(""))) {
+                name = "/";
+            } else if (name.startsWith("##")) {
+                name = "/" + name;
+            }
+            loggerName = "[" + name + "]"
+                + ((loggerName != null) ? ("." + loggerName) : "");
+            current = current.getParent();
+        }
+        logName = ContainerBase.class.getName() + "." + loggerName;
+        return logName;
 
     }
 
@@ -1183,33 +1211,6 @@ public abstract class ContainerBase extends LifecycleMBeanBase
     }
 
 
-    /**
-     * @return the abbreviated name of this container for logging messages
-     */
-    protected String logName() {
-
-        if (logName != null) {
-            return logName;
-        }
-        String loggerName = null;
-        Container current = this;
-        while (current != null) {
-            String name = current.getName();
-            if ((name == null) || (name.equals(""))) {
-                name = "/";
-            } else if (name.startsWith("##")) {
-                name = "/" + name;
-            }
-            loggerName = "[" + name + "]"
-                + ((loggerName != null) ? ("." + loggerName) : "");
-            current = current.getParent();
-        }
-        logName = ContainerBase.class.getName() + "." + loggerName;
-        return logName;
-
-    }
-
-
     // -------------------- JMX and Registration  --------------------
 
     @Override
@@ -1318,8 +1319,23 @@ public abstract class ContainerBase extends LifecycleMBeanBase
     }
 
 
-    // -------------------------------------- ContainerExecuteDelay Inner Class
+    @Override
+    public final String toString() {
+        StringBuilder sb = new StringBuilder();
+        Container parent = getParent();
+        if (parent != null) {
+            sb.append(parent.toString());
+            sb.append('.');
+        }
+        sb.append(this.getClass().getSimpleName());
+        sb.append('[');
+        sb.append(getName());
+        sb.append(']');
+        return sb.toString();
+    }
 
+
+    // -------------------------------------- ContainerExecuteDelay Inner Class
 
     /**
      * Private thread class to invoke the backgroundProcess method
